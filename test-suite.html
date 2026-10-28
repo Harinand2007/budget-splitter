@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BudgetSplit - Automated Test Suite</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 24px; max-width: 800px; margin: 0 auto; }
+    h1 { color: #10b981; }
+    .test-box { background: #1e293b; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid #64748b; }
+    .test-box.pass { border-left-color: #10b981; }
+    .test-box.fail { border-left-color: #ef4444; }
+    .status { font-weight: 700; font-size: 0.9rem; padding: 4px 8px; border-radius: 4px; }
+    .status.pass { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .status.fail { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .summary { font-size: 1.1rem; margin: 20px 0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>BudgetSplit Verification Suite</h1>
+  <p>Automated tests verifying core split calculations, debt minimization, filtering, and local persistence logic.</p>
+  
+  <div id="summary" class="summary">Running tests...</div>
+  <div id="results"></div>
+
+  <!-- Load App scripts -->
+  <script src="app.js"></script>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const resultsContainer = document.getElementById('results');
+      const summaryEl = document.getElementById('summary');
+      let passed = 0;
+      let total = 0;
+
+      function assert(name, condition, extraInfo = '') {
+        total++;
+        const box = document.createElement('div');
+        box.className = 'test-box ' + (condition ? 'pass' : 'fail');
+        box.innerHTML = `
+          <div>
+            <div style="font-weight: 600;">${name}</div>
+            ${extraInfo ? `<div style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">${extraInfo}</div>` : ''}
+          </div>
+          <span class="status ${condition ? 'pass' : 'fail'}">${condition ? 'PASSED' : 'FAILED'}</span>
+        `;
+        resultsContainer.appendChild(box);
+        if (condition) passed++;
+      }
+
+      try {
+        // Test 1: Sample Data Generator
+        const demo = generateDemoData();
+        assert(
+          '1. Demo Data Generator schema integrity',
+          demo && Array.isArray(demo.expenses) && demo.expenses.length >= 8 && Array.isArray(demo.groups) && demo.groups.length >= 2,
+          `Generated ${demo.expenses.length} expenses and ${demo.groups.length} groups`
+        );
+
+        // Test 2: Equal Split with exact balance conservation
+        const testGroup1 = {
+          id: 'test-grp-1',
+          name: 'Dinner Test',
+          members: [
+            { id: 'm1', name: 'Alice' },
+            { id: 'm2', name: 'Bob' },
+            { id: 'm3', name: 'Charlie' }
+          ],
+          expenses: [
+            {
+              id: 'e1',
+              description: 'Dinner',
+              amount: 90.00,
+              paidBy: 'm1',
+              splitType: 'equal',
+              participants: ['m1', 'm2', 'm3'],
+              splits: { 'm1': 30, 'm2': 30, 'm3': 30 }
+            }
+          ],
+          settlements: []
+        };
+        const res1 = calculateGroupBalances(testGroup1);
+        assert(
+          '2. Equal Split balance calculation ($90 split 3 ways)',
+          res1.balances['m1'] === 60 && res1.balances['m2'] === -30 && res1.balances['m3'] === -30,
+          `Alice balance: ${res1.balances['m1']}, Bob: ${res1.balances['m2']}, Charlie: ${res1.balances['m3']}`
+        );
+
+        // Test 3: Debt Minimization Output
+        assert(
+          '3. Debt Simplification minimization ($30 from Bob, $30 from Charlie to Alice)',
+          res1.simplifiedDebts.length === 2 &&
+          res1.simplifiedDebts.some(d => d.fromId === 'm2' && d.toId === 'm1' && d.amount === 30) &&
+          res1.simplifiedDebts.some(d => d.fromId === 'm3' && d.toId === 'm1' && d.amount === 30),
+          `Generated ${res1.simplifiedDebts.length} simplified debt transactions`
+        );
+
+        // Test 4: Settlement eliminates debt
+        testGroup1.settlements.push({
+          id: 's1',
+          fromMemberId: 'm2',
+          toMemberId: 'm1',
+          amount: 30.00,
+          date: '2026-10-27'
+        });
+        const res2 = calculateGroupBalances(testGroup1);
+        assert(
+          '4. Settle Up removes Bob\'s debt completely',
+          Math.abs(res2.balances['m2']) < 0.01 && res2.balances['m1'] === 30,
+          `Bob balance after settlement: ${res2.balances['m2']}, Alice balance: ${res2.balances['m1']}`
+        );
+
+        // Test 5: Format money
+        assert(
+          '5. Currency formatter precision',
+          formatMoney(45.5, '$') === '$45.50' && formatMoney(1200, '€') === '€1,200.00',
+          `Formatted $45.50 and €1,200.00 correctly`
+        );
+
+        // Test 6: Categories configuration
+        assert(
+          '6. Expense Categories coverage',
+          DEFAULT_CATEGORIES.length === 7 && DEFAULT_CATEGORIES.some(c => c.id === 'Food') && DEFAULT_CATEGORIES.some(c => c.id === 'Travel') && DEFAULT_CATEGORIES.some(c => c.id === 'Education'),
+          `Configured all 7 required expense categories`
+        );
+
+        // Test 7: Local Storage persistence simulation
+        saveStateToStorage(demo);
+        const retrieved = loadInitialState();
+        assert(
+          '7. LocalStorage roundtrip persistence',
+          retrieved && retrieved.expenses.length === demo.expenses.length && retrieved.monthlyBudget === demo.monthlyBudget,
+          `Successfully saved and loaded state from localStorage`
+        );
+
+      } catch (err) {
+        assert('Fatal test runner exception', false, err.message);
+      }
+
+      summaryEl.innerHTML = passed === total
+        ? `✅ All ${passed} / ${total} tests passed successfully!`
+        : `⚠️ ${passed} / ${total} tests passed. Check failed assertions above.`;
+      summaryEl.style.color = passed === total ? '#34d399' : '#f87171';
+    });
+  </script>
+</body>
+</html>
